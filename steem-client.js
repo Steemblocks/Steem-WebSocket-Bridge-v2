@@ -153,7 +153,7 @@ async function runTests() {
 
 // Run demonstration if this file is executed directly
 if (require.main === module) {
-  console.log('Steem WebSocket Client Demo');
+  console.log('Steem WebSocket Client');
   console.log('Connecting to Steem blockchain via WebSocket...\n');
   runTests();
 }
