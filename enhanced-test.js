@@ -72,7 +72,7 @@ async function testEnhancedServer() {
         // Determine if this was likely cached (very fast response)
         const isCached = responseCount > 1 && (response.id === 2 || response.id === 4);
         
-        console.log(`✅ [Request ${response.id}] Success ${isCached ? '(CACHED ⚡)' : '(FRESH 🔥)'}`);
+        console.log(`[Request ${response.id}] Success ${isCached ? '(CACHED)' : '(FRESH)'}`);
         
         if (response.id === 1 || response.id === 2) {
           console.log(`Block: ${response.result.head_block_number}`);
@@ -86,7 +86,7 @@ async function testEnhancedServer() {
           success: true
         });
       } else if (response.error) {
-        console.log(`❌ [Request ${response.id || 'unknown'}] Error: ${response.error}`);
+        console.log(`[Request ${response.id || 'unknown'}] Error: ${response.error}`);
         responses.push({
           id: response.id || 'unknown',
           cached: false,
@@ -109,19 +109,19 @@ async function testEnhancedServer() {
       
       if (responses.filter(r => r.success).length >= 3) {
         console.log('\n SUCCESS: Enhanced server working perfectly!');
-        console.log('✅ Intelligent caching: WORKING');
-        console.log('✅ Node switching: READY');  
-        console.log('✅ Error handling: READY');
-        console.log('✅ Smart API calls: WORKING');
+        console.log('Intelligent caching: WORKING');
+        console.log('Node switching: READY');  
+        console.log('Error handling: READY');
+        console.log('Smart API calls: WORKING');
         resolve(responses);
       } else {
-        console.log('\n❌ Some tests failed');
+        console.log('\nSome tests failed');
         reject(new Error('Test failures detected'));
       }
     });
 
     ws.on('error', function(error) {
-      console.error('❌ WebSocket connection error:', error.message);
+      console.error('WebSocket connection error:', error.message);
       reject(error);
     });
   });
