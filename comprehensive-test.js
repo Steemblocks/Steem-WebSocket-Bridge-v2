@@ -37,10 +37,10 @@ async function measureResponseTime(method, params, testName, expectedTime = 1000
         const dataSize = message.result ? JSON.stringify(message.result).length : 0;
         const cached = responseTime < 50;
         
-        const cacheStatus = cached ? '🟢 CACHED' : '🔵 FRESH';
+        const cacheStatus = cached ? 'CACHED' : 'FRESH';
         const sizeDisplay = dataSize > 0 ? `${(dataSize/1024).toFixed(1)}KB` : 'N/A';
         
-        console.log(`${success ? '✅' : '❌'} ${testName.padEnd(40)} | ${String(responseTime + 'ms').padEnd(8)} | ${sizeDisplay.padEnd(8)} | ${cacheStatus}`);
+        console.log(`${success ? 'SUCCESS' : 'FAILED'} ${testName.padEnd(40)} | ${String(responseTime + 'ms').padEnd(8)} | ${sizeDisplay.padEnd(8)} | ${cacheStatus}`);
         
         ws.close();
         resolve({ success, time: responseTime, cached, dataSize, testName });
@@ -51,7 +51,7 @@ async function measureResponseTime(method, params, testName, expectedTime = 1000
       if (!resolved) {
         resolved = true;
         clearTimeout(timeout);
-        console.log(`❌ ${testName}: CONNECTION ERROR`);
+        console.log(`${testName}: CONNECTION ERROR`);
         resolve({ success: false, time: null, cached: false, testName });
       }
     });
@@ -111,20 +111,20 @@ async function runComprehensiveTest() {
   
   if (cached.length > 0) {
     const avgCached = cached.reduce((sum, r) => sum + r.time, 0) / cached.length;
-    console.log(`🟢 Cached API Average: ${Math.round(avgCached)}ms (${cached.length} calls)`);
+    console.log(`Cached API Average: ${Math.round(avgCached)}ms (${cached.length} calls)`);
   }
   
   if (fresh.length > 0) {
     const avgFresh = fresh.reduce((sum, r) => sum + r.time, 0) / fresh.length;
-    console.log(`🔵 Fresh API Average: ${Math.round(avgFresh)}ms (${fresh.length} calls)`);
+    console.log(`Fresh API Average: ${Math.round(avgFresh)}ms (${fresh.length} calls)`);
   }
   
   const failed = results.filter(r => !r.success);
   if (failed.length > 0) {
-    console.log(`❌ Failed APIs: ${failed.length}/${results.length}`);
+    console.log(`Failed APIs: ${failed.length}/${results.length}`);
   }
   
-  console.log(`✅ Success Rate: ${Math.round(successful.length/results.length*100)}%`);
+  console.log(`Success Rate: ${Math.round(successful.length/results.length*100)}%`);
   
   // Performance Grade
   if (successful.length > 0) {
@@ -132,15 +132,15 @@ async function runComprehensiveTest() {
     console.log('\n PERFORMANCE GRADE:');
     
     if (avgTime < 100) {
-      console.log('🟢 EXCELLENT - Sub-100ms average (Perfect for real-time apps)');
+      console.log('EXCELLENT - Sub-100ms average (Perfect for real-time apps)');
     } else if (avgTime < 300) {
-      console.log('🟡 VERY GOOD - Sub-300ms average (Great for most applications)');
+      console.log('VERY GOOD - Sub-300ms average (Great for most applications)');
     } else if (avgTime < 500) {
-      console.log('🟠 GOOD - Sub-500ms average (Acceptable for web apps)');
+      console.log('GOOD - Sub-500ms average (Acceptable for web apps)');
     } else if (avgTime < 1000) {
-      console.log('🔴 FAIR - Sub-1s average (May need optimization)');
+      console.log('FAIR - Sub-1s average (May need optimization)');
     } else {
-      console.log('🔴 NEEDS WORK - >1s average (Requires optimization)');
+      console.log('NEEDS WORK - >1s average (Requires optimization)');
     }
     
     console.log(`\n Cache Effectiveness: ${Math.round(cached.length/successful.length*100)}% of successful calls were cached`);
