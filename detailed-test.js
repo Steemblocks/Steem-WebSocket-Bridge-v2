@@ -10,7 +10,7 @@ async function testSingleAPI(method, params, description) {
     
     const timeout = setTimeout(() => {
       if (!responded) {
-        console.log(`❌ ${description}: TIMEOUT (>5s)`);
+        console.log(`${description}: TIMEOUT (>5s)`);
         ws.close();
         resolve({ method, time: null, success: false, cached: false });
       }
@@ -35,7 +35,7 @@ async function testSingleAPI(method, params, description) {
         const success = !!message.result;
         const dataSize = JSON.stringify(message.result || {}).length;
         
-        console.log(`${success ? '✅' : '❌'} ${description}: ${responseTime}ms (${(dataSize/1024).toFixed(1)}KB)`);
+        console.log(`${success ? 'SUCCESS' : 'FAILED'} ${description}: ${responseTime}ms (${(dataSize/1024).toFixed(1)}KB)`);
         
         ws.close();
         resolve({ 
@@ -52,7 +52,7 @@ async function testSingleAPI(method, params, description) {
       if (!responded) {
         responded = true;
         clearTimeout(timeout);
-        console.log(`❌ ${description}: CONNECTION ERROR`);
+        console.log(`${description}: CONNECTION ERROR`);
         resolve({ method, time: null, success: false, cached: false });
       }
     });
@@ -92,16 +92,16 @@ async function runDetailedTests() {
   
   if (cached.length > 0) {
     const avgCached = cached.reduce((sum, r) => sum + r.time, 0) / cached.length;
-    console.log(`🟢 CACHED responses: ${Math.round(avgCached)}ms average (${cached.length} tests)`);
+    console.log(`CACHED responses: ${Math.round(avgCached)}ms average (${cached.length} tests)`);
   }
   
   if (uncached.length > 0) {
     const avgUncached = uncached.reduce((sum, r) => sum + r.time, 0) / uncached.length;
-    console.log(`🔵 UNCACHED responses: ${Math.round(avgUncached)}ms average (${uncached.length} tests)`);
+    console.log(`UNCACHED responses: ${Math.round(avgUncached)}ms average (${uncached.length} tests)`);
   }
   
   if (failed.length > 0) {
-    console.log(`🔴 FAILED responses: ${failed.length} tests failed`);
+    console.log(`FAILED responses: ${failed.length} tests failed`);
   }
   
   const successful = results.filter(r => r.success && r.time);
