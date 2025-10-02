@@ -107,7 +107,7 @@ async function runTests() {
     // Wait a moment for connection to stabilize
     await new Promise(resolve => setTimeout(resolve, 1000));
     
-    console.log('\n🚀 Starting Steem API tests...\n');
+    console.log('\nStarting Steem API tests...\n');
     
     // Test 1: Get dynamic global properties (CRITICAL API)
     console.log('=== Test 1: get_dynamic_global_properties ===');
@@ -139,14 +139,14 @@ async function runTests() {
     
     await new Promise(resolve => setTimeout(resolve, 2000));
     
-    console.log('\n✅ Tests completed. WebSocket will continue receiving broadcasts...');
+    console.log('\nTests completed. WebSocket will continue receiving broadcasts...');
     console.log('Press Ctrl+C to exit.');
     
     // Keep connection alive to receive real-time blockchain updates
     // In production, client would stay connected for live data
     
   } catch (error) {
-    console.error('❌ Test failed:', error.message);
+    console.error('Test failed:', error.message);
     client.close();
   }
 }
