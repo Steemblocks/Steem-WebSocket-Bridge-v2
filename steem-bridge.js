@@ -20,6 +20,19 @@ class SteemWebSocketServer {
     this.httpServer = null;
     this.startTime = Date.now();
     
+    // Client subscription management
+    this.subscribers = {
+      globalProperties: new Set(),
+      blocks: new Set(),
+      blockHeaders: new Set(),
+      operations: new Set(),
+      witnesses: new Set()
+    };
+    
+    // Block monitoring for subscribers
+    this.lastProcessedBlock = null;
+    this.blockSubscriptionData = new Map(); // Cache recent blocks for subscribers
+    
     // Enhanced node management with health tracking
     this.nodeHealth = steemNodes.map(node => ({
       url: node,
@@ -40,10 +53,10 @@ class SteemWebSocketServer {
       operations: new Map(),   // Cache operations
       lastGlobalUpdate: 0,
       lastWitnessUpdate: 0,
-      globalTTL: 3000,    // 3 seconds
-      witnessTTL: 60000,  // 60 seconds
-      blockTTL: 300000,   // 5 minutes for blocks
-      maxCacheSize: 1000  // Max cached items per type
+      globalTTL: 3000,     // 3 seconds
+      witnessTTL: 300000,  // 5 minutes (witnesses change infrequently)
+      blockTTL: 300000,    // 5 minutes for blocks
+      maxCacheSize: 1000   // Max cached items per type
     };
     
     // Request queue to handle burst traffic
@@ -147,7 +160,7 @@ class SteemWebSocketServer {
       // Rate limiting per connection
       ws.messageCount = 0;
       ws.lastReset = Date.now();
-      ws.maxMessagesPerMinute = 60;
+      ws.maxMessagesPerMinute = 2000; // Increased for high-frequency apps (33/sec avg)
       
       // Send welcome message
       ws.send(JSON.stringify({
@@ -161,7 +174,23 @@ class SteemWebSocketServer {
           'get_ops_in_block',
           'get_active_witnesses',
           'get_transaction'
-        ]
+        ],
+        subscriptionApis: [
+          'subscribe_global_properties',
+          'unsubscribe_global_properties',
+          'subscribe_blocks',
+          'unsubscribe_blocks',
+          'subscribe_block_headers',
+          'unsubscribe_block_headers',
+          'subscribe_operations',
+          'unsubscribe_operations',
+          'subscribe_witnesses',
+          'unsubscribe_witnesses'
+        ],
+        rateLimits: {
+          requestsPerMinute: 2000,
+          subscriptionsUnlimited: true
+        }
       }));
 
       ws.on('message', async (message) => {
@@ -176,7 +205,7 @@ class SteemWebSocketServer {
         if (ws.messageCount > ws.maxMessagesPerMinute) {
           ws.send(JSON.stringify({
             type: 'error',
-            error: 'Rate limit exceeded. Max 60 messages per minute.',
+            error: 'Rate limit exceeded. Max 2000 messages per minute.',
             rateLimitReset: new Date(ws.lastReset + 60000).toISOString()
           }));
           return;
@@ -209,6 +238,12 @@ class SteemWebSocketServer {
         console.log(`Client disconnected from ${clientIP} (${this.wss.clients.size} remaining)`);
         // Cleanup any pending requests for this client
         this.requestQueue = this.requestQueue.filter(req => req.ws !== ws);
+        // Cleanup all subscriptions
+        this.subscribers.globalProperties.delete(ws);
+        this.subscribers.blocks.delete(ws);
+        this.subscribers.blockHeaders.delete(ws);
+        this.subscribers.operations.delete(ws);
+        this.subscribers.witnesses.delete(ws);
       });
 
       ws.on('error', (error) => {
@@ -229,6 +264,14 @@ class SteemWebSocketServer {
       console.log('   - condenser_api.get_ops_in_block');
       console.log('   - condenser_api.get_active_witnesses');
       console.log('   - condenser_api.get_transaction');
+      console.log(`\nSubscription endpoints (for high-frequency apps):`);
+      console.log('   - subscribe_global_properties (real-time block updates)');
+      console.log('   - subscribe_blocks (full block data)');
+      console.log('   - subscribe_block_headers (block headers only)');
+      console.log('   - subscribe_operations (block operations)');
+      console.log('   - subscribe_witnesses (witness updates)');
+      console.log('   - unsubscribe_* (unsubscribe from any feed)');
+      console.log(`\nRate limits: 2000 req/min | Subscriptions: unlimited`);
     });
 
     this.wss.on('error', (error) => {
@@ -275,7 +318,7 @@ class SteemWebSocketServer {
     currentHealth.lastError = Date.now();
     currentHealth.errorCount++;
     
-    console.log(`🔄 Node ${steemNodes[this.currentNodeIndex]} marked unhealthy (${currentHealth.errorCount} errors)`);
+    console.log(`Node ${steemNodes[this.currentNodeIndex]} marked unhealthy (${currentHealth.errorCount} errors)`);
     
     // Find the healthiest node
     const healthyNodes = this.nodeHealth
@@ -357,7 +400,7 @@ class SteemWebSocketServer {
         nodeHealth.errorCount++;
         nodeHealth.lastError = Date.now();
         
-        console.error(`❌ API call failed (attempt ${attempt}/${maxRetries}): ${error.message} (${responseTime}ms)`);
+        console.error(`API call failed (attempt ${attempt}/${maxRetries}): ${error.message} (${responseTime}ms)`);
         
         // Try switching nodes if this isn't the last attempt
         if (attempt < maxRetries) {
@@ -499,6 +542,118 @@ class SteemWebSocketServer {
           result = await this.getTransaction(params[0]);
           break;
           
+        // New subscription methods
+        case 'subscribe_global_properties':
+          this.subscribers.globalProperties.add(ws);
+          ws.send(JSON.stringify({
+            id,
+            result: { subscribed: true, type: 'global_properties' },
+            type: 'response'
+          }));
+          // Send current data immediately
+          if (this.cache.globalProperties) {
+            ws.send(JSON.stringify({
+              type: 'subscription_update',
+              subscription: 'global_properties',
+              data: this.cache.globalProperties,
+              timestamp: new Date().toISOString()
+            }));
+          }
+          return;
+          
+        case 'unsubscribe_global_properties':
+          this.subscribers.globalProperties.delete(ws);
+          ws.send(JSON.stringify({
+            id,
+            result: { unsubscribed: true, type: 'global_properties' },
+            type: 'response'
+          }));
+          return;
+          
+        case 'subscribe_blocks':
+          this.subscribers.blocks.add(ws);
+          ws.send(JSON.stringify({
+            id,
+            result: { subscribed: true, type: 'blocks' },
+            type: 'response'
+          }));
+          return;
+          
+        case 'unsubscribe_blocks':
+          this.subscribers.blocks.delete(ws);
+          ws.send(JSON.stringify({
+            id,
+            result: { unsubscribed: true, type: 'blocks' },
+            type: 'response'
+          }));
+          return;
+          
+        // Block headers subscription
+        case 'subscribe_block_headers':
+          this.subscribers.blockHeaders.add(ws);
+          ws.send(JSON.stringify({
+            id,
+            result: { subscribed: true, type: 'block_headers' },
+            type: 'response'
+          }));
+          return;
+          
+        case 'unsubscribe_block_headers':
+          this.subscribers.blockHeaders.delete(ws);
+          ws.send(JSON.stringify({
+            id,
+            result: { unsubscribed: true, type: 'block_headers' },
+            type: 'response'
+          }));
+          return;
+          
+        // Operations subscription
+        case 'subscribe_operations':
+          this.subscribers.operations.add(ws);
+          ws.send(JSON.stringify({
+            id,
+            result: { subscribed: true, type: 'operations' },
+            type: 'response'
+          }));
+          return;
+          
+        case 'unsubscribe_operations':
+          this.subscribers.operations.delete(ws);
+          ws.send(JSON.stringify({
+            id,
+            result: { unsubscribed: true, type: 'operations' },
+            type: 'response'
+          }));
+          return;
+          
+        // Witnesses subscription
+        case 'subscribe_witnesses':
+          this.subscribers.witnesses.add(ws);
+          ws.send(JSON.stringify({
+            id,
+            result: { subscribed: true, type: 'witnesses' },
+            type: 'response'
+          }));
+          // Send current data immediately
+          if (this.cache.activeWitnesses) {
+            ws.send(JSON.stringify({
+              type: 'subscription_update',
+              subscription: 'witnesses',
+              data: this.cache.activeWitnesses,
+              timestamp: new Date().toISOString()
+            }));
+          }
+          return;
+          
+        case 'unsubscribe_witnesses':
+          this.subscribers.witnesses.delete(ws);
+          ws.send(JSON.stringify({
+            id,
+            result: { unsubscribed: true, type: 'witnesses' },
+            type: 'response'
+          }));
+          return;
+          
         default:
           throw new Error(`Unsupported method: ${method}`);
       }
@@ -556,7 +711,7 @@ class SteemWebSocketServer {
     } catch (error) {
       // Return stale cache if available during errors
       if (this.cache.globalProperties) {
-        console.warn('⚠️ Using stale global properties cache due to API error');
+        console.warn('Using stale global properties cache due to API error');
         this.errorStats.cacheHits++;
         return this.cache.globalProperties;
       }
@@ -579,7 +734,7 @@ class SteemWebSocketServer {
       console.log(`Block header retrieved: ${blockNumber} (${steemNodes[this.currentNodeIndex]})`);
       return result;
     } catch (error) {
-      console.error(`❌ Failed to get block header ${blockNumber}:`, error.message);
+      console.error(`Failed to get block header ${blockNumber}:`, error.message);
       throw error;
     }
   }
@@ -599,7 +754,7 @@ class SteemWebSocketServer {
       console.log(`Block retrieved: ${blockNumber} with ${result.transactions?.length || 0} transactions (${steemNodes[this.currentNodeIndex]})`);
       return result;
     } catch (error) {
-      console.error(`❌ Failed to get block ${blockNumber}:`, error.message);
+      console.error(`Failed to get block ${blockNumber}:`, error.message);
       throw error;
     }
   }
@@ -619,7 +774,7 @@ class SteemWebSocketServer {
       console.log(`Operations retrieved for block ${blockNumber}: ${result.length} ops (virtual: ${onlyVirtual}) (${steemNodes[this.currentNodeIndex]})`);
       return result;
     } catch (error) {
-      console.error(`❌ Failed to get ops in block ${blockNumber}:`, error.message);
+      console.error(`Failed to get ops in block ${blockNumber}:`, error.message);
       throw error;
     }
   }
@@ -637,9 +792,21 @@ class SteemWebSocketServer {
       const result = await this.callSteemAPI('getActiveWitnesses', []);
       
       // Cache the result
+      const previousWitnesses = this.cache.activeWitnesses;
       this.cache.activeWitnesses = result;
       this.cache.lastWitnessUpdate = now;
       this.errorStats.cacheMisses++;
+      
+      // Broadcast to witness subscribers if data changed
+      if (this.subscribers.witnesses.size > 0 && JSON.stringify(previousWitnesses) !== JSON.stringify(result)) {
+        const witnessMessage = JSON.stringify({
+          type: 'subscription_update',
+          subscription: 'witnesses',
+          data: result,
+          timestamp: new Date().toISOString()
+        });
+        this.broadcastToSubscribers(this.subscribers.witnesses, witnessMessage, 'witnesses');
+      }
       
       console.log(`Active witnesses retrieved: ${result.length} witnesses (${steemNodes[this.currentNodeIndex]})`);
       return result;
@@ -661,7 +828,7 @@ class SteemWebSocketServer {
       console.log(`Transaction retrieved: ${transactionId} (${steemNodes[this.currentNodeIndex]})`);
       return result;
     } catch (error) {
-      console.error(`❌ Failed to get transaction ${transactionId}:`, error.message);
+      console.error(`Failed to get transaction ${transactionId}:`, error.message);
       throw error;
     }
   }
@@ -677,7 +844,24 @@ class SteemWebSocketServer {
         // Only broadcast if data actually changed
         const currentBlock = this.cache.globalProperties?.head_block_number;
         if (this.wss && this.cache.globalProperties && currentBlock !== previousBlock) {
-          const message = JSON.stringify({
+          
+          // Broadcast to subscribers only (more efficient)
+          if (this.subscribers.globalProperties.size > 0) {
+            const subscriptionMessage = JSON.stringify({
+              type: 'subscription_update',
+              subscription: 'global_properties',
+              data: this.cache.globalProperties,
+              timestamp: new Date().toISOString()
+            });
+            
+            this.broadcastToSubscribers(this.subscribers.globalProperties, subscriptionMessage, 'global_properties');
+          }
+          
+          // Process new block data for other subscriptions
+          await this.processNewBlockForSubscriptions(currentBlock);
+          
+          // Legacy broadcast for backward compatibility
+          const legacyMessage = JSON.stringify({
             type: 'broadcast',
             method: 'dynamic_global_properties_update',
             data: this.cache.globalProperties,
@@ -686,14 +870,14 @@ class SteemWebSocketServer {
           
           let broadcastCount = 0;
           this.wss.clients.forEach(client => {
-            if (client.readyState === WebSocket.OPEN) {
-              client.send(message);
+            if (client.readyState === WebSocket.OPEN && !this.subscribers.globalProperties.has(client)) {
+              client.send(legacyMessage);
               broadcastCount++;
             }
           });
           
           if (broadcastCount > 0) {
-            console.log(`Broadcasted block ${currentBlock} to ${broadcastCount} clients`);
+            console.log(`Legacy broadcasted block ${currentBlock} to ${broadcastCount} clients`);
           }
         }
       } catch (error) {
@@ -704,6 +888,99 @@ class SteemWebSocketServer {
     }, 3000);
 
     console.log('Smart periodic updates initialized (3s intervals)');
+  }
+
+  // Process new block data for all subscriptions
+  async processNewBlockForSubscriptions(blockNumber) {
+    try {
+      // Process block data for subscribers
+      if (this.subscribers.blocks.size > 0 || this.subscribers.blockHeaders.size > 0 || this.subscribers.operations.size > 0) {
+        
+        // Fetch block header for header subscribers
+        if (this.subscribers.blockHeaders.size > 0) {
+          try {
+            const blockHeader = await this.getBlockHeader(blockNumber);
+            const headerMessage = JSON.stringify({
+              type: 'subscription_update',
+              subscription: 'block_headers',
+              data: { blockNumber, header: blockHeader },
+              timestamp: new Date().toISOString()
+            });
+            this.broadcastToSubscribers(this.subscribers.blockHeaders, headerMessage, 'block_headers');
+          } catch (error) {
+            console.warn(`Failed to fetch block header ${blockNumber}:`, error.message);
+          }
+        }
+        
+        // Fetch full block for block subscribers
+        if (this.subscribers.blocks.size > 0 || this.subscribers.operations.size > 0) {
+          try {
+            const fullBlock = await this.getBlock(blockNumber);
+            
+            // Broadcast to block subscribers
+            if (this.subscribers.blocks.size > 0) {
+              const blockMessage = JSON.stringify({
+                type: 'subscription_update',
+                subscription: 'blocks',
+                data: { blockNumber, block: fullBlock },
+                timestamp: new Date().toISOString()
+              });
+              this.broadcastToSubscribers(this.subscribers.blocks, blockMessage, 'blocks');
+            }
+            
+            // Fetch and broadcast operations if there are operation subscribers
+            if (this.subscribers.operations.size > 0) {
+              try {
+                const operations = await this.getOpsInBlock(blockNumber, false);
+                const opsMessage = JSON.stringify({
+                  type: 'subscription_update',
+                  subscription: 'operations',
+                  data: { blockNumber, operations },
+                  timestamp: new Date().toISOString()
+                });
+                this.broadcastToSubscribers(this.subscribers.operations, opsMessage, 'operations');
+              } catch (error) {
+                console.warn(`Failed to fetch operations for block ${blockNumber}:`, error.message);
+              }
+            }
+          } catch (error) {
+            console.warn(`Failed to fetch block ${blockNumber}:`, error.message);
+          }
+        }
+      }
+      
+      this.lastProcessedBlock = blockNumber;
+      
+    } catch (error) {
+      console.error('Error processing block subscriptions:', error.message);
+    }
+  }
+
+  // Helper method to broadcast to subscribers with cleanup
+  broadcastToSubscribers(subscriberSet, message, subscriptionType) {
+    let successCount = 0;
+    const deadConnections = [];
+    
+    subscriberSet.forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        try {
+          client.send(message);
+          successCount++;
+        } catch (error) {
+          console.warn(`Failed to send to subscriber:`, error.message);
+          deadConnections.push(client);
+        }
+      } else {
+        deadConnections.push(client);
+      }
+    });
+    
+    // Clean up dead connections
+    deadConnections.forEach(client => subscriberSet.delete(client));
+    
+    if (successCount > 0) {
+      console.log(`Broadcasted ${subscriptionType} to ${successCount} subscribers`);
+    }
   }
 
   // Node failover functionality
@@ -754,6 +1031,18 @@ class SteemWebSocketServer {
         status: '/status'
       },
       connectedClients: this.wss ? this.wss.clients.size : 0,
+      subscribers: {
+        globalProperties: this.subscribers.globalProperties.size,
+        blocks: this.subscribers.blocks.size,
+        blockHeaders: this.subscribers.blockHeaders.size,
+        operations: this.subscribers.operations.size,
+        witnesses: this.subscribers.witnesses.size,
+        total: this.subscribers.globalProperties.size + 
+               this.subscribers.blocks.size + 
+               this.subscribers.blockHeaders.size +
+               this.subscribers.operations.size +
+               this.subscribers.witnesses.size
+      },
       queueLength: this.requestQueue.length,
       maxQueueSize: this.maxQueueSize,
       totalApiCallsSaved: Math.floor((uptime / 1000) * 13.2), // Estimated API calls saved
