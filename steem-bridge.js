@@ -4,11 +4,16 @@ const http = require('http');
 
 // Initialize Steem client with multiple nodes for redundancy
 const steemNodes = [
-  'https://api.steemit.com',
-  'https://api.moecki.online',
-  'https://api.steemitdev.com',
-  'https://steemd.steemworld.org',
-  'https://rpc.amarbangla.net'
+  'https://api.steemit.com/',
+  'https://api.moecki.online/',
+  'https://api.steemitdev.com/',
+  'https://steemd.steemworld.org/',
+  'https://api.pennsif.net/',
+  'https://api.botsteem.com/',
+  'https://api.steememory.com/',
+  'https://steemapi.boylikegirl.club/',
+  'https://api.justyy.com/',
+  'https://api.steem.fans/'
 ];
 
 class SteemWebSocketServer {
