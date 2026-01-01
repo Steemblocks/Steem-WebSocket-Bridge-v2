@@ -56,11 +56,15 @@ class SteemWebSocketServer {
       blockHeaders: new Map(), // Cache block headers
       blocks: new Map(), // Cache full blocks
       operations: new Map(), // Cache operations
+      market: new Map(), // Cache market data (ticker, orderbook, trades)
+      account: new Map(), // Cache account data
       lastGlobalUpdate: 0,
       lastWitnessUpdate: 0,
       globalTTL: 3000, // 3 seconds
       witnessTTL: 300000, // 5 minutes (witnesses change infrequently)
       blockTTL: 300000, // 5 minutes for blocks
+      marketTTL: 4000, // 4 seconds for market data
+      accountTTL: 10000, // 10 seconds for account data
       maxCacheSize: 1000, // Max cached items per type
     };
 
@@ -578,6 +582,8 @@ class SteemWebSocketServer {
     this.cache.blockHeaders.clear();
     this.cache.blocks.clear();
     this.cache.operations.clear();
+    this.cache.market.clear();
+    this.cache.account.clear();
     this.cache.lastGlobalUpdate = 0;
     this.cache.lastWitnessUpdate = 0;
     console.log("Cache cleared for node switch");
@@ -1106,19 +1112,80 @@ class SteemWebSocketServer {
   }
 
   async getTicker(params) {
-    return this.callSteemAPI("getTicker", params);
+    const cacheKey = `ticker_${JSON.stringify(params)}`;
+    const cached = this.getCacheItem(
+      this.cache.market,
+      cacheKey,
+      this.cache.marketTTL
+    );
+    if (cached) return cached;
+
+    try {
+      const result = await this.callSteemAPI("getTicker", params);
+      this.setCacheItem(this.cache.market, cacheKey, result);
+      return result;
+    } catch (error) {
+      console.error("Failed to get ticker:", error.message);
+      throw error;
+    }
   }
 
   async getOrderBook(params) {
-    return this.callSteemAPI("getOrderBook", params);
+    const cacheKey = `orderbook_${JSON.stringify(params)}`;
+    const cached = this.getCacheItem(
+      this.cache.market,
+      cacheKey,
+      this.cache.marketTTL
+    );
+    if (cached) return cached;
+
+    try {
+      const result = await this.callSteemAPI("getOrderBook", params);
+      this.setCacheItem(this.cache.market, cacheKey, result);
+      return result;
+    } catch (error) {
+      console.error("Failed to get order book:", error.message);
+      throw error;
+    }
   }
 
   async getRecentTrades(params) {
-    return this.callSteemAPI("getRecentTrades", params);
+    const cacheKey = `trades_${JSON.stringify(params)}`;
+    const cached = this.getCacheItem(
+      this.cache.market,
+      cacheKey,
+      this.cache.marketTTL
+    );
+    if (cached) return cached;
+
+    try {
+      const result = await this.callSteemAPI("getRecentTrades", params);
+      this.setCacheItem(this.cache.market, cacheKey, result);
+      return result;
+    } catch (error) {
+      console.error("Failed to get recent trades:", error.message);
+      throw error;
+    }
   }
 
   async getAccounts(params) {
-    return this.callSteemAPI("getAccounts", params);
+    const cacheKey = `accounts_${JSON.stringify(params)}`;
+    // Use accountTTL for account data
+    const cached = this.getCacheItem(
+      this.cache.account,
+      cacheKey,
+      this.cache.accountTTL
+    );
+    if (cached) return cached;
+
+    try {
+      const result = await this.callSteemAPI("getAccounts", params);
+      this.setCacheItem(this.cache.account, cacheKey, result);
+      return result;
+    } catch (error) {
+      console.error(`Failed to get accounts:`, error.message);
+      throw error;
+    }
   }
 
   async getMarketHistory(params) {
@@ -1337,10 +1404,7 @@ class SteemWebSocketServer {
     this.steemClient = new Client(newNode, { failoverThreshold: 0 });
 
     // Clear all caches to force fresh data from new node
-    this.cache.globalProperties = null;
-    this.cache.activeWitnesses = null;
-    this.cache.lastGlobalUpdate = 0;
-    this.cache.lastWitnessUpdate = 0;
+    this.clearCache();
   }
 
   // Broadcast message to all connected clients
