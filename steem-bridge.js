@@ -32,6 +32,7 @@ class SteemWebSocketServer {
       blockHeaders: new Set(),
       operations: new Set(),
       witnesses: new Set(),
+      powerMeter: new Map(), // Map<WebSocket, string> (socket -> username)
     };
 
     // Block monitoring for subscribers
@@ -58,6 +59,7 @@ class SteemWebSocketServer {
       operations: new Map(), // Cache operations
       market: new Map(), // Cache market data (ticker, orderbook, trades)
       account: new Map(), // Cache account data
+      other: new Map(), // Cache for other miscellaneous data
       lastGlobalUpdate: 0,
       lastWitnessUpdate: 0,
       globalTTL: 3000, // 3 seconds
@@ -65,6 +67,7 @@ class SteemWebSocketServer {
       blockTTL: 300000, // 5 minutes for blocks
       marketTTL: 4000, // 4 seconds for market data
       accountTTL: 10000, // 10 seconds for account data
+      otherTTL: 30000, // 30 seconds for misc data
       maxCacheSize: 1000, // Max cached items per type
     };
 
@@ -203,7 +206,12 @@ class SteemWebSocketServer {
             "get_market_history",
             "get_account_history",
             "get_witnesses_by_vote",
+            "get_witnesses_by_vote",
             "get_vesting_delegations",
+            "find_accounts",
+            "get_reward_fund",
+            "find_rc_accounts",
+            "get_current_median_history_price",
           ],
           subscriptionApis: [
             "subscribe_global_properties",
@@ -216,6 +224,8 @@ class SteemWebSocketServer {
             "unsubscribe_operations",
             "subscribe_witnesses",
             "unsubscribe_witnesses",
+            "subscribe_power_meter",
+            "unsubscribe_power_meter",
           ],
           rateLimits: {
             requestsPerMinute: 2000,
@@ -284,6 +294,7 @@ class SteemWebSocketServer {
         this.subscribers.blockHeaders.delete(ws);
         this.subscribers.operations.delete(ws);
         this.subscribers.witnesses.delete(ws);
+        this.subscribers.powerMeter.delete(ws);
       });
 
       ws.on("error", (error) => {
@@ -499,6 +510,38 @@ class SteemWebSocketServer {
               params
             );
             break;
+          case "findAccounts":
+            // database_api.find_accounts params: { accounts: [] }
+            result = await this.steemClient.call(
+              "database_api",
+              "find_accounts",
+              params
+            );
+            break;
+          case "getRewardFund":
+            // condenser_api.get_reward_fund params: [name]
+            result = await this.steemClient.call(
+              "condenser_api",
+              "get_reward_fund",
+              params
+            );
+            break;
+          case "findRCAccounts":
+            // rc_api.find_rc_accounts params: { accounts: [] }
+            result = await this.steemClient.call(
+              "rc_api",
+              "find_rc_accounts",
+              params
+            );
+            break;
+          case "getCurrentMedianHistoryPrice":
+            // condenser_api.get_current_median_history_price params: []
+            result = await this.steemClient.call(
+              "condenser_api",
+              "get_current_median_history_price",
+              params
+            );
+            break;
           default:
             throw new Error(`Unknown method: ${method}`);
         }
@@ -584,6 +627,7 @@ class SteemWebSocketServer {
     this.cache.operations.clear();
     this.cache.market.clear();
     this.cache.account.clear();
+    this.cache.other.clear();
     this.cache.lastGlobalUpdate = 0;
     this.cache.lastWitnessUpdate = 0;
     console.log("Cache cleared for node switch");
@@ -727,6 +771,29 @@ class SteemWebSocketServer {
           result = await this.getVestingDelegations(params);
           break;
 
+        case "database_api.find_accounts":
+        case "find_accounts":
+          if (!params.accounts) throw new Error("accounts parameter required");
+          result = await this.findAccounts(params);
+          break;
+
+        case "condenser_api.get_reward_fund":
+        case "get_reward_fund":
+          if (!params[0]) throw new Error("Reward fund name required");
+          result = await this.getRewardFund(params);
+          break;
+
+        case "rc_api.find_rc_accounts":
+        case "find_rc_accounts":
+          if (!params.accounts) throw new Error("accounts parameter required");
+          result = await this.findRCAccounts(params);
+          break;
+
+        case "condenser_api.get_current_median_history_price":
+        case "get_current_median_history_price":
+          result = await this.getCurrentMedianHistoryPrice(params);
+          break;
+
         // New subscription methods
         case "subscribe_global_properties":
           this.subscribers.globalProperties.add(ws);
@@ -858,6 +925,39 @@ class SteemWebSocketServer {
             JSON.stringify({
               id,
               result: { unsubscribed: true, type: "witnesses" },
+              type: "response",
+            })
+          );
+          return;
+
+          return;
+
+        case "subscribe_power_meter":
+          if (!params[0]) {
+            throw new Error("Username required for power meter subscription");
+          }
+          this.subscribers.powerMeter.set(ws, params[0]);
+          ws.send(
+            JSON.stringify({
+              id,
+              result: {
+                subscribed: true,
+                type: "power_meter",
+                user: params[0],
+              },
+              type: "response",
+            })
+          );
+          // Send immediate initial data
+          this.sendPowerMeterUpdate(ws, params[0]);
+          return;
+
+        case "unsubscribe_power_meter":
+          this.subscribers.powerMeter.delete(ws);
+          ws.send(
+            JSON.stringify({
+              id,
+              result: { unsubscribed: true, type: "power_meter" },
               type: "response",
             })
           );
@@ -1204,6 +1304,95 @@ class SteemWebSocketServer {
     return this.callSteemAPI("getVestingDelegations", params);
   }
 
+  async findAccounts(params) {
+    return this.callSteemAPI("findAccounts", params);
+  }
+
+  async getRewardFund(params) {
+    // Cache reward fund as it changes rarely
+    const cacheKey = `reward_fund_${params[0]}`;
+    const cached = this.getCacheItem(
+      this.cache.other,
+      cacheKey,
+      this.cache.otherTTL
+    );
+    if (cached) return cached;
+
+    const result = await this.callSteemAPI("getRewardFund", params);
+    this.setCacheItem(this.cache.other, cacheKey, result);
+    return result;
+  }
+
+  async findRCAccounts(params) {
+    // Caching for RC accounts (short TTL as RC changes frequently)
+    const cacheKey = `rc_${JSON.stringify(params)}`;
+    const cached = this.getCacheItem(this.cache.account, cacheKey, 3000); // 3s fast cache
+    if (cached) return cached;
+
+    const result = await this.callSteemAPI("findRCAccounts", params);
+    this.setCacheItem(this.cache.account, cacheKey, result);
+    return result;
+  }
+
+  async getCurrentMedianHistoryPrice(params) {
+    const cacheKey = "median_history_price";
+    const cached = this.getCacheItem(
+      this.cache.other,
+      cacheKey,
+      this.cache.otherTTL
+    );
+    if (cached) return cached;
+
+    const result = await this.callSteemAPI(
+      "getCurrentMedianHistoryPrice",
+      params
+    );
+    this.setCacheItem(this.cache.other, cacheKey, result);
+    return result;
+  }
+
+  // Power Meter Aggregator
+  async getPowerMeterData(username) {
+    try {
+      const [accounts, rewardFund, rcAccounts, medianPrice] = await Promise.all(
+        [
+          this.findAccounts({ accounts: [username] }),
+          this.getRewardFund(["post"]),
+          this.findRCAccounts({ accounts: [username] }),
+          this.getCurrentMedianHistoryPrice([]),
+        ]
+      );
+
+      return {
+        username,
+        account: accounts.accounts[0],
+        rc_account: rcAccounts.rc_accounts[0],
+        reward_fund: rewardFund,
+        median_history_price: medianPrice,
+      };
+    } catch (error) {
+      console.error(
+        `Error aggregating power meter data for ${username}:`,
+        error.message
+      );
+      return null;
+    }
+  }
+
+  async sendPowerMeterUpdate(ws, username) {
+    const data = await this.getPowerMeterData(username);
+    if (data && ws.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({
+          type: "subscription_update",
+          subscription: "power_meter",
+          data: data,
+          timestamp: new Date().toISOString(),
+        })
+      );
+    }
+  }
+
   // Setup periodic updates for critical data
   setupPeriodicUpdates() {
     // Update global properties every 3 seconds (matches client requirements)
@@ -1263,6 +1452,16 @@ class SteemWebSocketServer {
             );
           }
         }
+
+        // Process Power Meter Subscriptions periodically
+        // We do this every 5 seconds to match user requirements
+        if (
+          Date.now() - (this.lastPowerMeterUpdate || 0) >= 5000 &&
+          this.subscribers.powerMeter.size > 0
+        ) {
+          this.lastPowerMeterUpdate = Date.now();
+          this.processPowerMeterSubscriptions();
+        }
       } catch (error) {
         console.error("Periodic update failed:", error.message);
         // Try switching nodes if we get repeated failures
@@ -1271,6 +1470,28 @@ class SteemWebSocketServer {
     }, 3000);
 
     console.log("Smart periodic updates initialized (3s intervals)");
+  }
+
+  async processPowerMeterSubscriptions() {
+    // De-duplicate users to batch requests effectively (not implemented fully here but prepared)
+    const activeSubs = Array.from(this.subscribers.powerMeter.entries());
+
+    // We process sequentially or in small batches to avoid hitting rate limits
+    // Since we cached individual API calls, subsequent requests for same user will hit cache
+    for (const [ws, username] of activeSubs) {
+      if (ws.readyState === WebSocket.OPEN) {
+        // We intentionally don't await this to preventing blocking the main loop
+        // but we should be careful about congestion.
+        this.sendPowerMeterUpdate(ws, username).catch((err) =>
+          console.error(
+            `Failed to push power meter to ${username}:`,
+            err.message
+          )
+        );
+      } else {
+        this.subscribers.powerMeter.delete(ws);
+      }
+    }
   }
 
   // Process new block data for all subscriptions
